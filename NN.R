@@ -214,7 +214,7 @@ cor(predicted_strength2, plant_test$energy_output)
 
 
 
-###### Mnist 실습  SVM 으로 풀기 #####
+###### Mnist 실습  신경망 으로 풀기 #####
 
 install.packages("caret")
 install.packages("doParallel")
@@ -281,34 +281,22 @@ load_mnist()
 
 # Normalize: X = (X - min) / (max - min) => X = (X - 0) / (255 - 0) => X = X / 255.
 
-train$x <- train$x / 255
-
-# Setup training data with digit and pixel values with 60/40 split for train/cv.
-
-inTrain = data.frame(y=train$y, train$x)
-inTrain$y <- as.factor(inTrain$y)
-trainIndex = createDataPartition(inTrain$y, p = 0.60,list=FALSE)
-training = inTrain[trainIndex,]
+############### Mnist 신경망으로 풀기 ##########
+install.packages("neuralnet")
+library(neuralnet)
+head(training)
+str(training)
+training <- data.matrix(training)
+training
+n <- colnames(training)
+f <- as.formula(paste("y ~", paste(n[!n %in% c('y')], collapse = " + ")))
+fit2 <- neuralnet(formula = f, data = head(training, 1000), hidden = c('5','5'))
 cv = inTrain[-trainIndex,]
 
-# SVM. 95/94.
+plot(fit2)
+str(cv)
+head(cv[,2:785], 1000)
+cv <- data.matrix(cv)
 
-fit <- train(y ~ ., data = head(training, 1000), method = 'svmRadial', tuneGrid = data.frame(sigma=0.0107249, C=1))
-
-results <- predict(fit, newdata = head(cv, 1000))
-results
-
-confusionMatrix(results, head(cv$y, 1000))
-
-
-show_digit(as.matrix(training[5,2:785]))
-
-# Predict the digit.
-
-predict(fit, newdata = training[5,])
-
-# Check the actual answer for the digit.
-
-training[5,1]
-
+model_results <- compute(fit2,head(cv[,training[-1]],1000))
 
