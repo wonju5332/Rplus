@@ -214,126 +214,101 @@ cor(predicted_strength2, plant_test$energy_output)
 
 
 
-########mnist
+###### Mnist 실습  SVM 으로 풀기 #####
+
+install.packages("caret")
+install.packages("doParallel")
+install.packages("kernlab")
+install.packages("ggplot2")
+install.packages("lattice")
+library(ggplot2)
+library(lattice)
+library(kernlab)
+library(caret)
+library(doParallel)
+
+# Enable parallel processing.
+
+cl <- makeCluster(detectCores())
+registerDoParallel(cl)
+
 # Load the MNIST digit recognition dataset into R
 # http://yann.lecun.com/exdb/mnist/
 # assume you have all 4 files and gunzip'd them
-# creates train$n, train$x, train$y and test$n, test$x, test$y
+# creates train$n, train$x, train$y  and test$n, test$x, test$y
 # e.g. train$x is a 60000 x 784 matrix, each row is one digit (28x28)
-# call: show_digit(train$x[5,]) to see a digit.
+# call:  show_digit(train$x[5,])   to see a digit.
 # brendan o'connor - gist.github.com/39760 - anyall.org
 
-load_image_file <- function(conn) {
-  readBin(conn, 'integer', n=1, size=4, endian='big')
-  n = readBin(conn, 'integer', n=1, size=4, endian='big')
-  nrow = readBin(conn, 'integer', n=1, size=4, endian='big')
-  ncol = readBin(conn, 'integer', n=1, size=4, endian='big')
-  x = readBin(conn, 'integer', n=n*nrow*ncol, size=1, signed=F)
-  x = matrix(x,  ncol=nrow * ncol,  byrow=T)
-  close(conn)
-  return(x)
+load_mnist <- function() {
+  load_image_file <- function(filename) {
+    ret = list()
+    f = file(filename,'rb')
+    readBin(f,'integer',n=1,size=4,endian='big')
+    ret$n = readBin(f,'integer',n=1,size=4,endian='big')
+    nrow = readBin(f,'integer',n=1,size=4,endian='big')
+    ncol = readBin(f,'integer',n=1,size=4,endian='big')
+    x = readBin(f,'integer',n=ret$n*nrow*ncol,size=1,signed=F)
+    ret$x = matrix(x, ncol=nrow*ncol, byrow=T)
+    close(f)
+    ret
+  }
+  load_label_file <- function(filename) {
+    f = file(filename,'rb')
+    readBin(f,'integer',n=1,size=4,endian='big')
+    n = readBin(f,'integer',n=1,size=4,endian='big')
+    y = readBin(f,'integer',n=n,size=1,signed=F)
+    close(f)
+    y
+  }
+  train <<- load_image_file('train-images.idx3-ubyte')
+  test <<- load_image_file('t10k-images.idx3-ubyte')
+  
+  train$y <<- load_label_file('train-labels.idx1-ubyte')
+  test$y <<- load_label_file('t10k-labels.idx1-ubyte')  
 }
 
-load_label_file <- function(conn) {
-  readBin(conn, 'integer', n=1, size=4, endian='big')
-  n = readBin(conn, 'integer', n=1, size=4, endian='big')
-  y = readBin(conn, 'integer', n = n, size=1, signed=F)
-  close(conn)
-  return(y)
+show_digit <- function(arr784, col=gray(12:1/12), ...) {
+  image(matrix(arr784, nrow=28)[,28:1], col=col, ...)
 }
 
-download.mnist <- function(range = c(0, 1), global = FALSE) {
-  mnist <- list(
-    train = list(),
-    test = list()
-  )
-  
-  mnist$train$x <- load_image_file(gzcon(url("http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz", "rb")))
-  mnist$test$x <- load_image_file(gzcon(url("http://yann.lecun.com/exdb/mnist/t10k-images-idx3-ubyte.gz", "rb")))
-  mnist$train$y <- load_label_file(gzcon(url("http://yann.lecun.com/exdb/mnist/train-labels-idx1-ubyte.gz", "rb")))
-  mnist$test$y <- load_label_file(gzcon(url("http://yann.lecun.com/exdb/mnist/t10k-labels-idx1-ubyte.gz", "rb")))
-  
-  # Normalize the x's - only if needed
-  if (!isTRUE(all.equal(c(0, 255), range))) {
-    if (! is.numeric(range))
-      stop("'range' must be a numeric vector")
-    if (length(range) != 2)
-      range <- range(range)
-    
-    mnist$train$x <-  mnist$train$x / (255 / diff(range)) + range[1]
-    mnist$test$x <-  mnist$test$x / (255 / diff(range)) + range[1]
-    
-    # Convert to integer if possible
-    s <- seq(range[1], range[2], length.out = 256)
-    if (isTRUE(all.equal(s, as.integer(s)))) {
-      storage.mode(mnist$train$x) <- "integer"
-      storage.mode(mnist$test$x) <- "integer"
-    }
-  }
-  
-  if (global) {
-    save(mnist, file = paste(system.file(package="mnist"), "data", "mnist.RData", sep=.Platform$file.sep))
-    assign("mnist", mnist, envir = globalenv())
-  }
-  
-  return(mnist)
-}
-plot.mnist <- function(x = mnist$test$x, label = mnist$test$y + 1, model = prcomp(mnist$train$x),
-                       predictions = predict(model, x)[,1:2], reconstructions = tcrossprod(predictions, model$rotation[,1:2]),
-                       show.reconstructions = TRUE,
-                       highlight.digits = c(11, 3, 2, 91, 20, 188, 92, 1, 111, 13),
-                       digits.col = c("#FF0000FF", "#0000FFFF", "#964B00FF", "#FF00FFFF", "#00AAAAFF", "#00EE00FF", "#000000FF", "#000000FF", "#AAAAAAFF", "#FF9900FF"),
-                       digits.alphas.reverse = c(FALSE, TRUE)[c(1, 1, 1, 1, 1, 1, 2, 1, 1, 1)],
-                       pch = 21,
-                       pch.col = c("black", "white")[c(1, 2, 1, 1, 1, 1, 1, 2, 1, 1)],
-                       pch.bg = c("#FF0000FF", "#0000FFFF", "#964B00FF", "#FF00FFFF", "#00AAAAFF", "#00EE00FF", "#FFFFFFFF", "#000000FF", "#AAAAAAFF", "#FF9900FF"),
-                       cex = 1.5,
-                       cex.axis = .5,
-                       cex.lab = .5,
-                       cex.highlight = 2.5,
-                       xlab = "Node 1",
-                       ylab = "Node 2",
-                       xlim = NULL,
-                       ylim = NULL,
-                       ncol = 10,
-                       ...
-) {
-  
-  n.highlight <- length(highlight.digits)
-  layout(cbind(seq_along(highlight.digits), matrix(1 + n.highlight + ifelse(show.reconstructions, n.highlight, 0), nrow=n.highlight, ncol=ncol), if (show.reconstructions) seq_along(highlight.digits) + n.highlight))
-  
-  opar <- par(cex=cex)
-  
-  alphas.gen <- expand.grid(c(0:9, LETTERS[1:6]), c(0:9, LETTERS[1:6]))
-  alphas <- paste(alphas.gen[,2], alphas.gen[,1], sep="")
-  
-  sapply(seq_along(highlight.digits), function(i) {show.digit(x[highlight.digits[i],], col=paste(substring(digits.col[label[highlight.digits[i]]], 1, 7), if (digits.alphas.reverse[i]) rev(alphas) else alphas, sep=""))})
-  if (show.reconstructions) {
-    sapply(seq_along(highlight.digits), function(i) {show.digit(reconstructions[highlight.digits[i],], col=paste(substring(digits.col[label[highlight.digits[i]]], 1, 7), if (digits.alphas.reverse[i]) rev(alphas) else alphas, sep=""))})
-  }
-  
-  
-  par(cex=cex, mar=c(3, 3, 0, 0), mgp=c(2, 1, 0))
-  plot(predictions[, 1], predictions[, 2], xlab = xlab, ylab = ylab, xlim = xlim, ylim = ylim,
-       pch = pch, bg = pch.bg[label], col=pch.col[label], cex.axis=cex.axis, cex.lab=cex.lab)
-  points(predictions[highlight.digits, 1], predictions[highlight.digits, 2], pch = pch, bg = pch.bg[label[highlight.digits]], col = pch.col[label[highlight.digits]], cex=cex.highlight)
-  
-  par(opar)
-}
+train <- data.frame()
+test <- data.frame()
 
-plot.mnist()
+# Load data.
+setwd('d:/R_data/mnist')
+load_mnist()
 
-.onAttach <- function(lib, pkg) {
-  # It makes no sense to request the user to say data(mnist) after loading the package
-  # with library(mnist), so load it automatically
-  mnist_data_file <- system.file("data/mnist.RData", package="mnist")
-  if (mnist_data_file == "") {
-    packageStartupMessage("Downloading mnist dataset...")
-    dir.create(paste(system.file(package="mnist"), "data", sep=.Platform$file.sep))
-    mnist <- download.mnist(global = TRUE)
-  }
-  packageStartupMessage("Use data(mnist) to load the MNIST dataset.")
-}
-.onAttach()
+# Normalize: X = (X - min) / (max - min) => X = (X - 0) / (255 - 0) => X = X / 255.
+
+train$x <- train$x / 255
+
+# Setup training data with digit and pixel values with 60/40 split for train/cv.
+
+inTrain = data.frame(y=train$y, train$x)
+inTrain$y <- as.factor(inTrain$y)
+trainIndex = createDataPartition(inTrain$y, p = 0.60,list=FALSE)
+training = inTrain[trainIndex,]
+cv = inTrain[-trainIndex,]
+
+# SVM. 95/94.
+
+fit <- train(y ~ ., data = head(training, 1000), method = 'svmRadial', tuneGrid = data.frame(sigma=0.0107249, C=1))
+
+results <- predict(fit, newdata = head(cv, 1000))
+results
+
+confusionMatrix(results, head(cv$y, 1000))
+
+
+show_digit(as.matrix(training[5,2:785]))
+
+# Predict the digit.
+
+predict(fit, newdata = training[5,])
+
+# Check the actual answer for the digit.
+
+training[5,1]
 
 
